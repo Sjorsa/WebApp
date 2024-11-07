@@ -71,15 +71,16 @@ class LyricsFetcher(ABC):
 
 
 class LrcLibFetcher(LyricsFetcher):
-    name = 'lrclib.net'
-    supports_synced = True
+    name: str = 'lrclib.net'
+    supports_synced: bool = True
 
+    @override
     def find(self, title: str, artist: str, album: str | None, duration: int | None) -> Lyrics | None:
-        params = {'track_name': title, 'artist_name': artist}
+        params: dict[str, str] = {'track_name': title, 'artist_name': artist}
         if album is not None:
             params['album_name'] = album
         if duration is not None:
-            params['duration'] = duration
+            params['duration'] = str(duration)
         response = requests.get('https://lrclib.net/api/get',
                                 params=params,
                                 timeout=5,
@@ -120,11 +121,11 @@ class MusixMatchFetcher(LyricsFetcher):
     Adapted from: https://gitlab.com/ronie/script.cu.lrclyrics/-/blob/master/lib/culrcscrapers/musixmatchlrc/lyricsScraper.py
     Licensed under GPL v2
     """
-    name = 'MusixMatch'
-    supports_synced = True
+    name: str = 'MusixMatch'
+    supports_synced: bool = True
 
-    _SEARCH_URL = 'https://apic-desktop.musixmatch.com/ws/1.1/%s'
-    _session = requests.Session
+    _SEARCH_URL: str = 'https://apic-desktop.musixmatch.com/ws/1.1/%s'
+    _session:  requests.Session
     _cached_token: str | None = None
     _cached_token_expiration_time: int = 0
 
@@ -143,15 +144,16 @@ class MusixMatchFetcher(LyricsFetcher):
         response = self._session.get(url, params=query, timeout=10)
         result = response.json()
         if 'message' in result and 'body' in result["message"] and 'user_token' in result["message"]["body"]:
-            self._cached_token = result["message"]["body"]["user_token"]
+            token = result["message"]["body"]["user_token"]
+            self._cached_token = token
             self._cached_token_expiration_time = int(time.time()) + 600
-            return self._cached_token
+            return token
 
         raise ValueError('could not obtain token', result)
 
-    def get_lyrics_from_list(self, track_id):
+    def get_lyrics_from_list(self, track_id: str) -> str | None:
         url = self._SEARCH_URL % 'track.subtitle.get'
-        query = [('track_id', track_id), ('subtitle_format', 'lrc'), ('app_id', 'web-desktop-app-v1.0'), ('usertoken', self.get_token()), ('t', int(time.time()))]
+        query: dict[str, str] = {'track_id': track_id, 'subtitle_format': 'lrc', 'app_id': 'web-desktop-app-v1.0', 'usertoken': self.get_token(), 't': str(int(time.time()))}
         response = self._session.get(url, params=query, timeout=10)
         result = response.json()
 
@@ -179,10 +181,16 @@ class MusixMatchFetcher(LyricsFetcher):
                 found_title = item['track']['track_name']
                 found_track_id = item['track']['track_id']
                 log.info('musixmatch: search result: %s: %s - %s', found_track_id, found_artist, found_title)
-                if _strmatch(title, found_title) and _strmatch(artist, found_artist):
-                    lyrics = self.get_lyrics_from_list(found_track_id)
-                    if lyrics is not None:
-                        return TimeSyncedLyrics.from_lrc('MusixMatch', lyrics)
+                if not _strmatch(title, found_title) and _strmatch(artist, found_artist):
+                    continue
+
+                lyrics = self.get_lyrics_from_list(found_track_id)
+                if lyrics is None or lyrics == '':
+                    # when this happens, the website shows "Unfortunately we're not authorized to show these lyrics..."
+                    log.warning('musixmatch: lyrics are unavailable, likely for legal reasons')
+                    continue
+
+                return TimeSyncedLyrics.from_lrc('MusixMatch', lyrics)
 
         return None
 
@@ -192,8 +200,8 @@ class AZLyricsFetcher(LyricsFetcher):
     Adapted from: https://gitlab.com/ronie/script.cu.lrclyrics/-/blob/master/lib/culrcscrapers/azlyrics/lyricsScraper.py
     Licensed under GPL v2
     """
-    name = 'AZLyrics'
-    supports_synced = False
+    name: str = 'AZLyrics'
+    supports_synced: bool = False
 
     @override
     def find(self, title: str, artist: str, album: str | None, duration: int | None) -> PlainLyrics | None:
@@ -213,8 +221,8 @@ class AZLyricsFetcher(LyricsFetcher):
 
 
 class GeniusFetcher(LyricsFetcher):
-    name = 'Genius'
-    supports_synced = False
+    name: str = 'Genius'
+    supports_synced: bool = False
 
     @override
     def find(self, title: str, artist: str, album: str | None, duration: int | None) -> PlainLyrics | None:
@@ -384,7 +392,7 @@ def to_dict(lyrics: Lyrics | None) -> dict[str, Any]:
         raise ValueError(lyrics)
 
 
-def from_dict(dict) -> Lyrics | None:
+def from_dict(dict: dict[str, Any]) -> Lyrics | None:
     if dict['type'] == 'none':
         return None
 
@@ -407,8 +415,6 @@ def find(title: str, artist: str, album: str | None, duration: int | None) -> Ly
     if cached_dict is not None:
         log.info('returning lyrics from cache')
         return from_dict(cached_dict)
-    #     log.info('returning lyrics from cache')
-    #     return from_dict(cached_dict)
 
     lyrics = _find(title, artist, album, duration)
 

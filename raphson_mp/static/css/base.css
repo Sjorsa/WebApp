@@ -127,6 +127,7 @@ select,
 button,
 .button,
 input[type=text],
+input[type=search],
 input[type=number],
 input[type=submit],
 input[type=password],
@@ -218,6 +219,7 @@ input::placeholder {
     grid-template-columns: auto auto;
     column-gap: var(--gap);
     row-gap: var(--smallgap);
+    align-items: center; /* center vertically, if one element in a row is taller than another */
     width: 100%;
     max-width: 60rem;
     box-sizing: border-box;
@@ -333,7 +335,7 @@ input::placeholder {
     overflow: hidden; /* prevent top row from overlapping rounded corners */
 }
 
-.table thead tr {
+.table thead {
     background: black;
     position: sticky; /* stay visible when scrolling */
     top: 0;
@@ -353,6 +355,10 @@ input::placeholder {
 .table .button-col {
     width: 2.75rem;
     height: 2.75rem;
+}
+
+th[colspan] {
+    text-align: center;
 }
 
 /* Boxes */

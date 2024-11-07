@@ -4,7 +4,6 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from sqlite3 import Connection
 
 from raphson_mp import music
 
@@ -88,6 +87,25 @@ METADATA_ADVERTISEMENT_KEYWORDS = [
     'Speeeedy EDM Blog',
 ]
 
+_NORMALIZE_PATTERN = re.compile(r'(\(ft\. .*?\))|' +
+                                       r'(\(feat\. .*?\))|' +
+                                       r'(\(with .*?\))|' +
+                                       r'(\(w/ .*?\))|' +
+                                       r'( - Remastered \d{4})|' +
+                                       r'( - \d{4} remaster)|' +
+                                       r'( - \d{4} remastered version)|' +
+                                       r'( - remastered)|' +
+                                       r'( - album version remastered)|' +
+                                       r'( - rerecorded)|' +
+                                       r'( - original version)|' +
+                                       r'( - original mix)|' +
+                                       r'( - radio edit)')
+
+
+def normalize_title(text: str) -> str:
+    """Return lower case title with some parts removed for the purpose of matching"""
+    return re.sub(_NORMALIZE_PATTERN, '', text.lower())
+
 
 def ignore_album(album: str) -> bool:
     """Check whether album name should be ignored"""
@@ -110,17 +128,6 @@ def _strip_keywords(inp: str) -> str:
     for strip_keyword in FILENAME_STRIP_KEYWORDS:
         inp = inp.replace(strip_keyword, '')
     return inp
-
-
-def _is_alpha(char: str) -> bool:
-    """
-    Check whether given character is alphanumeric, a dash or a space
-    """
-    return char == ' ' or \
-           char == '-' or \
-           'a' <= char <= 'z' or \
-           'A' <= char <= 'Z' or \
-           '0' <= char <= '9'
 
 
 def _join_meta_list(entries: list[str]) -> str:

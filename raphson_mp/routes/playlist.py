@@ -1,7 +1,15 @@
+import difflib
+from queue import Queue
+from threading import Thread
+from typing import cast
+
 from flask import (Blueprint, Response, abort, redirect, render_template,
                    request)
 
-from raphson_mp import auth, db, jsonw, music, scanner, settings, util
+from raphson_mp import (auth, db, jsonw, metadata, music, scanner, settings,
+                        spotify, util)
+from raphson_mp.metadata import normalize_title
+from raphson_mp.spotify import SpotifyTrack
 
 bp = Blueprint('playlists', __name__, url_prefix='/playlist')
 
@@ -22,12 +30,15 @@ def route_playlists():
                             'stats': playlist.stats()}
                            for playlist in user_playlists]
 
+    spotify_available = settings.spotify_api_id and settings.spotify_api_secret
+
     return render_template('playlists.jinja2',
                            user_is_admin=user.admin,
                            playlists=user_playlists,
                            csrf_token=csrf_token,
                            primary_playlist=primary_playlist,
-                           playlists_stats=playlists_stats)
+                           playlists_stats=playlists_stats,
+                           spotify_available=spotify_available)
 
 
 @bp.route('/favorite', methods=['POST'])
@@ -73,11 +84,11 @@ def route_create():
     with db.connect() as conn:
         user = auth.verify_auth_cookie(conn, require_csrf=True)
 
-        dir_name = request.form['path']
+        name = request.form['name']
 
-        util.check_filename(dir_name)
+        util.check_filename(name)
 
-        path = settings.music_dir / dir_name
+        path = settings.music_dir / name
 
         if path.exists():
             abort(400, 'Playlist path already exists')
@@ -90,7 +101,7 @@ def route_create():
     with db.connect() as conn:
         # New playlist should be writable for user who created it
         conn.execute('INSERT INTO user_playlist_write VALUES (?, ?)',
-                     (user.user_id, dir_name))
+                     (user.user_id, name))
 
     return redirect('/playlist/manage', code=303)
 
@@ -172,3 +183,99 @@ def route_track(playlist):
             return Response('no track found', 404, content_type='text/plain')
 
         return chosen_track.info_dict()
+
+
+def _is_close(a: str, b: str) -> bool:
+    if a == b:
+        return True
+
+    diff = difflib.SequenceMatcher(None, a, b)
+    # real_quick_ratio() provides an upper bound on quick_ratio(), which provides an upper bound on ratio()
+    # ratio() is expensive so we must avoid it when possible
+    return diff.real_quick_ratio() > 0.8 and diff.quick_ratio() > 0.8 and diff.ratio() > 0.8
+
+
+@bp.route('/<playlist_name>/compare_spotify')
+def route_compare_spotify(playlist_name: str):
+    with db.connect(read_only=True) as conn:
+        auth.verify_auth_cookie(conn)
+
+        local_tracks: dict[tuple[str, tuple[str]], tuple[str, list[str]]] = {}
+
+        for title, artists in conn.execute("""
+                                           SELECT title, GROUP_CONCAT(artist, ';') AS artists
+                                           FROM track JOIN track_artist ON track.path = track_artist.track
+                                           WHERE track.playlist = ?
+                                           GROUP BY track.path
+                                           """, (playlist_name,)):
+            local_track = (title, artists.split(';'))
+            key = (normalize_title(title), tuple(local_track[1]))
+            local_tracks[key] = local_track
+
+        playlist_id = request.args['playlist_id']
+        spotify_tracks: Queue[SpotifyTrack|object] = Queue(maxsize=200)
+        sentinel = object()
+
+        # Retrieve track list from Spotify in a separate thread
+        def get_tracks():
+            try:
+                client = spotify.SpotifyClient()
+                for track in client.get_playlist(playlist_id):
+                    spotify_tracks.put(track)
+            finally:
+                spotify_tracks.put(sentinel)
+        Thread(target=get_tracks).start()
+
+        duplicate_check: set[str] = set()
+        duplicates: list[SpotifyTrack] = []
+        both: list[tuple[tuple[str, list[str]], SpotifyTrack]] = []
+        only_spotify: list[SpotifyTrack] = []
+        only_local: list[tuple[str, list[str]]] = []
+
+        for spotify_track in iter(spotify_tracks.get, sentinel):
+            spotify_track = cast(SpotifyTrack, spotify_track)
+            spotify_tracks.task_done()
+
+            normalized_title = metadata.normalize_title(spotify_track.title)
+
+            # Spotify duplicates
+            duplicate_check_entry = spotify_track.display
+            if duplicate_check_entry in duplicate_check:
+                duplicates.append(spotify_track)
+            duplicate_check.add(duplicate_check_entry)
+
+            # Try to find fast exact match
+            local_track_key = (normalized_title, tuple(spotify_track.artists))
+            if local_track_key in local_tracks:
+                local_track = local_tracks[local_track_key]
+            else:
+                # Cannot find exact match, look for partial match
+                for local_track_key in local_tracks.keys():
+                    (local_track_normalized_title, local_track_artists) = local_track_key
+                    if _is_close(normalized_title, local_track_normalized_title):
+                        # Title matches, now check if artist matches (more expensive)
+                        artist_match = False
+                        for artist_a in spotify_track.artists:
+                            for artist_b in local_track_artists:
+                                if _is_close(artist_a, artist_b):
+                                    artist_match = True
+                                    break
+                        if artist_match:
+                            break
+                else:
+                    # no match found
+                    only_spotify.append(spotify_track)
+                    continue
+
+            # match found, present in both
+            both.append((local_tracks[local_track_key], spotify_track))
+            del local_tracks[local_track_key]
+
+        # any local tracks still left in the dict must have no matching spotify track
+        only_local.extend(local_tracks.values())
+
+    return render_template('spotify_compare.jinja2',
+                           duplicates=duplicates,
+                           both=both,
+                           only_local=only_local,
+                           only_spotify=only_spotify)

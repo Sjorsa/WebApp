@@ -1,12 +1,27 @@
 document.addEventListener('DOMContentLoaded', () => {
     /** @type {HTMLButtonElement} */
     const videoButton = document.getElementById('button-video');
+    if (videoButton == null) {
+        console.warn('video: missing button, running in offline mode?');
+        return;
+    }
+
     /** @type {HTMLVideoElement} */
-    const videoElem = document.getElementById('video');
+    let videoElem = document.getElementById('video');
     /** @type {HTMLAudioElement} */
     const audioElem = getAudioElement();
 
     videoButton.classList.add('hidden');
+
+    function resetVideo() {
+        // cannot reliably remove source from video element, so we must create a new one
+        // https://stackoverflow.com/q/79162209/4833737
+        const newElem = document.createElement('video');
+        newElem.id = 'video';
+        newElem.setAttribute('muted', '');
+        videoElem.replaceWith(newElem);
+        videoElem = newElem;
+    }
 
     function blur() {
         for (const elem of document.getElementsByClassName('cover-img')) {
@@ -70,8 +85,7 @@ document.addEventListener('DOMContentLoaded', () => {
     audioElem.addEventListener('pause', () => videoElem.pause());
 
     eventBus.subscribe(MusicEvent.TRACK_CHANGE, () => {
-        videoElem.removeAttribute('src');
-        videoElem.load();
+        resetVideo();
         resetBlur();
 
         if (queue.currentTrack.track.video != null) {
